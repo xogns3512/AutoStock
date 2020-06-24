@@ -1,6 +1,7 @@
 from PyQt5.QAxContainer import *
 from PyQt5.QtCore import *
 from config.errorCode import  *
+from PyQt5.QtTest import *
 
 class Kiwoom(QAxWidget):
     def __init__(self):
@@ -10,7 +11,7 @@ class Kiwoom(QAxWidget):
         ###### event loop 를 실행시키기 위한 변수 모음
         self.login_event_loop= QEventLoop() # 로그인 요청용 이벤트 루프
         self.detail_account_info_event_loop = QEventLoop()
-        self.detail_account_info_event_loop_2 =QEventLoop()
+        self.calculator_event_loop = QEventLoop()
         #########################################
 
         #### 계좌 관련 변수
@@ -22,9 +23,11 @@ class Kiwoom(QAxWidget):
 
         #### 변수모음
         self.account_stock_dict={}
+        self.not_account_stock_dict = {}
 
         #### 요청스크린 번호
         self.screen_my_info = "2000"# 계좌 관련한 스크린번호
+        self.screen_calculation_stock = "4000" #계산용 스크린 번호
 
         ###### 초기 셋팅함수들 바로 실행
         self.get_ocx_instance() # OCX 방식을 파이썬에 사용할 수 있게 반환해 주는 함수 실행
@@ -33,6 +36,9 @@ class Kiwoom(QAxWidget):
         self.get_account_info() #계좌번호 가져오기
         self.detail_account_info() #예수금 요청 시그널 포함
         self.detail_account_mystock() #계좌평가 잔고내역요청
+        self.not_concluded_account() #미체결 요청
+        #QTimer.singleShot(5000, self.not_concluded_account)
+        self.calculator_fnc() #종목분석용, 임시용으로 실행
 
     def get_ocx_instance(self):
         self.setControl("KHOPENAPI.KHOpenAPICtrl.1") #래지스트리에 저장된 API모듈 불러오기
@@ -73,7 +79,17 @@ class Kiwoom(QAxWidget):
         self.dynamicCall("SetInputValue(QString, QString)", "조회구분", "1")
         self.dynamicCall("CommRqData(QString, QString, int, Qstring)", "계좌평가잔고내역요청", "opw00018", sPrevNext, self.screen_my_info)
 
-        self.detail_account_info_event_loop_2.exec_()
+        self.detail_account_info_event_loop.exec_()
+
+    def not_concluded_account(self, sPrevNext = "0"):
+        print("미체결")
+        self.dynamicCall("SetInputValue(QString, QString)", "계좌번호", self.account_num)
+        self.dynamicCall("SetInputValue(QString, QString)", "체결구분", "1")
+        self.dynamicCall("SetInputValue(QString, QString)", "매매구분", "0")
+        self.dynamicCall("CommRqData(QString, QString, int, QString)", "실시간미체결요청","opt10075",sPrevNext,self.screen_my_info)
+
+        self.detail_account_info_event_loop.exec_()
+
 
     def trdata_slot(self, sScrNo, sRQName, sTrCode, sRecordName, sPrevNext):
         '''
@@ -150,15 +166,110 @@ class Kiwoom(QAxWidget):
                 cnt+=1
 
             print("계좌에 가지고 있는 종목 %s" %cnt)
-            print("계좌 보유종물 count %s" %cnt)
+            print("계좌 보유종목 count %s" %cnt)
 
             if sPrevNext=="2":
                 self.detail_account_mystock(sPrevNext="2")
             else:
-                self.detail_accunt_info_event_loop_2.exit()
+                self.detail_account_info_event_loop.exit()
 
-            self.detail_account_info_event_loop_2.exit()
+        elif sRQName =="실시간미체결요청":
+            rows = self.dynamicCall("GetRepeatCnt(QString,QString)",sTrCode,sRQName)
+
+            for i in range(rows):
+                code = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"종목코드")
+                code_nm = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"종목명")
+                order_no = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"주문번호")
+                order_status = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"주문상태")
+                code_quantity = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"주문수량")
+                code_price = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"주문가격")
+                code_gubun = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"주문구분")
+                not_quantity = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"미체결수량")
+                ok_quantity = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,i,"체결량")
+
+                code = code.strip()
+                code_nm =  code_nm.strip()
+                order_no = int(order_no.strip())
+                order_status = order_status.strip()
+                code_quantity = int(order_quantity.strip())
+                code_price =  int(order_price.strip())
+                code_gubun = order_gubun.strip().lstrip('+').lstrip('-')
+                not_quantity = int(not_quantity.strip())
+                ok_quantity = int(ok_quantity.strip())
+
+                if order_no in self.not_account_stock_dict:
+                    pass
+                else:
+                    self.not_account_stock_dict[order_no] = {}
+
+                nasd = self.not_account_stock_dict[order_no]
+                nasd.update({'종목코드':code})
+                nasd.update({'종목명':code_nm})
+                nasd.update({'주문번호':order_no})
+                nasd.update({'주문상태':order_status})
+                nasd.update({'주문수량':order_quantity})
+                nasd.update({'주문가격':order_price})
+                nasd.update({'주문구분':order_gubun})
+                nasd.update({'미체결수량':not_quantity})
+                nasd.update({'체결량':ok_quantity})
+
+                print("미체결종목 : %s " %self.not_account_stock_dict[order_no])
+
+            self.detail_account_info_event_loop.exit()
+
+        elif sRQName == '주식일봉차트조회':
+            print('일봉데이터 요청')
+            code = self.dynamicCall("GetCommData(QString,QString,int,QString",sTrCode,sRQName,0, "종목코드")
+            code = code.strip()
+            print("%s 일봉데이터 요청" % code)
+
+            rows = self.dynamicCall("GetRepeatCnt(QString,QString)",sTrCode,sRQName)
+            print(rows)
+
+            if sPrevNext == "2":
+                self.day_kiwoom_db(code=code, sPrevNext=sPrevNext)
+            else:
+                self.calculator_event_loop.exit()
+
 
     def stop_screen_cancel(self,sScrNo=None):
         self.dynamicCall("DisconnectRealData(QString)", sScrNo)
+
+
+    def get_code_list_by_matket(self, market_code):
+        # 종목코드들 반환
+        code_list = self.dynamicCall("GetCodeListByMarket(QString)",market_code)
+        code_list = code_list.split(";")[:-1]
+        return code_list
+
+
+    def calculator_fnc(self):
+        '''
+        종목분석 실행용 함수
+        :return:
+        '''
+        code_list = self.get_code_list_by_matket("10")
+        print("코스닥 갯수 %s" %len(code_list))
+
+        for idx, code in enumerate(code_list):
+            self.dynamicCall("DisconnectRealData(QString)", self.screen_calculation_stock)
+            print("%s/%s : KOSDAQ Strock Code : %s is updating... " % (idx+1,len(code_list),code))
+            self.day_kiwoom_db(code=code)
+
+
+    def day_kiwoom_db(self,code=None, date=None, sPrevNext="0"):
+
+        QTest.qWait(3600) # 3.6초마다 딜레이
+
+        self.dynamicCall("SetInputValue(QString,QString)","종목코드",code)
+        self.dynamicCall("SetInputValue(QString,QString)","수정주가구분",1)
+
+        if date != None:
+            self.dynamicCall("SetInputValue(QString,QString)","기준일자",date)
+        self.dynamicCall("CommRqData(QString,QString,int,QString","주식일봉차트조회","opt10081",sPrevNext,self.screen_calculation_stock)
+        self.calculator_event_loop.exec_()
+
+
+
+
 
